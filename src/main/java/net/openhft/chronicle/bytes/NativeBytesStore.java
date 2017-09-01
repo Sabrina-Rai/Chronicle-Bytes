@@ -16,9 +16,15 @@
 
 package net.openhft.chronicle.bytes;
 
-import net.openhft.chronicle.core.*;
+import net.openhft.chronicle.core.Jvm;
+import net.openhft.chronicle.core.Maths;
+import net.openhft.chronicle.core.Memory;
+import net.openhft.chronicle.core.OS;
+import net.openhft.chronicle.core.ReferenceCounter;
+import net.openhft.chronicle.core.UnsafeMemory;
 import net.openhft.chronicle.core.annotation.ForceInline;
 import net.openhft.chronicle.core.io.IORuntimeException;
+import net.openhft.chronicle.core.util.WeakReferenceCleaner;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -27,11 +33,16 @@ import sun.misc.Cleaner;
 import sun.misc.Unsafe;
 import sun.nio.ch.DirectBuffer;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.nio.BufferOverflowException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+
+import static java.lang.invoke.MethodType.methodType;
 
 @SuppressWarnings("sunapi")
 public class NativeBytesStore<Underlying>
@@ -63,7 +74,8 @@ public class NativeBytesStore<Underlying>
     protected volatile Throwable releasedHere;
     protected long maximumLimit;
     @Nullable
-    private Cleaner cleaner;
+//    private Cleaner cleaner;
+    private WeakReferenceCleaner cleaner;
     private final ReferenceCounter refCount = ReferenceCounter.onReleased(this::performRelease);
     private boolean elastic;
     @Nullable
@@ -85,7 +97,7 @@ public class NativeBytesStore<Underlying>
             long address, long maximumLimit, @Nullable Runnable deallocator, boolean elastic) {
         setAddress(address);
         this.maximumLimit = maximumLimit;
-        cleaner = deallocator == null ? null : Cleaner.create(this, deallocator);
+        cleaner = deallocator == null ? null : WeakReferenceCleaner.newCleaner(this, deallocator);
         underlyingObject = null;
         this.elastic = elastic;
     }
@@ -168,7 +180,29 @@ public class NativeBytesStore<Underlying>
         underlyingObject = (Underlying) bb;
         setAddress(((DirectBuffer) bb).address());
         this.maximumLimit = bb.capacity();
-        cleaner = ((DirectBuffer) bb).cleaner();
+        cleaner = WeakReferenceCleaner.newCleaner(bb, getCleanerInvocation((DirectBuffer) bb));
+    }
+
+    @NotNull
+    private Runnable getCleanerInvocation(final @NotNull DirectBuffer bb) {
+        final String cleanerClassname = Jvm.isJava9Plus() ? "jdk.internal.ref.Cleaner" : "sun.misc.Cleaner";
+        try {
+            final Class<?> cleanerClass = Class.forName(cleanerClassname);
+            final MethodHandle cleanerMethod = MethodHandles.lookup().in(bb.getClass()).findVirtual(bb.getClass(), "cleaner", methodType(Cleaner.class));
+            final MethodHandle cleanMethod = MethodHandles.lookup().findVirtual(cleanerClass, "clean", methodType(void.class));
+
+            return () -> {
+                try {
+                    final Object cleaner = cleanerMethod.invokeExact(bb);
+                    cleanMethod.invokeExact(cleaner);
+                } catch (Throwable throwable) {
+                    throwable.printStackTrace();
+                }
+            };
+
+        } catch (NoSuchMethodException | IllegalAccessException | ClassNotFoundException e) {
+            throw new AssertionError(e);
+        }
     }
 
     public void uninit() {

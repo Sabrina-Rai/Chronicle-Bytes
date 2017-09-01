@@ -20,6 +20,7 @@ package net.openhft.chronicle.bytes;
 import net.openhft.chronicle.core.io.IORuntimeException;
 import org.jetbrains.annotations.NotNull;
 import org.junit.After;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.math.BigDecimal;
@@ -35,6 +36,7 @@ import static org.junit.Assert.assertEquals;
 /*
  * Created by Peter Lawrey on 20/04/2016.
  */
+@Ignore
 public class BytesMarshallableTest {
 
     @After
